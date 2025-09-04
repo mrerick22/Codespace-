@@ -1,24 +1,106 @@
-name: Executar SSHX na VPS
+name: SSHX Terminal Access
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      session_duration:
+        description: 'Duração da sessão em minutos'
+        required: false
+        default: '30'
+        type: string
 
 jobs:
-  run-sshx:
+  sshx-terminal:
     runs-on: ubuntu-latest
-
+    
     steps:
-    - name: Checkout do repositório
-      uses: actions/checkout@v3
-
-    - name: Instalar dependências básicas
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup environment
       run: |
-        sudo apt-get update
-        sudo apt-get install -y curl
-
-    - name: Executar SSHX
+        echo "🚀 Iniciando sessão SSHX..."
+        echo "Sistema: $(uname -a)"
+        echo "Usuário: $(whoami)"
+        
+    - name: Install and start SSHX
       run: |
+        echo "📥 Baixando e instalando SSHX..."
         curl -sSf https://sshx.io/get | sh
+        
+        echo "🔗 Iniciando terminal compartilhado..."
+        # Executa o sshx em background e captura o output
+        timeout ${{ github.event.inputs.session_duration || '30' }}m sshx --shell /bin/bash 2>&1 | tee sshx_output.log &
+        
+        # Aguarda um momento para o sshx inicializar
+        sleep 5
+        
+        # Procura pelo link na saída
+        echo "📋 Procurando pelo link do terminal..."
+        for i in {1..10}; do
+          if grep -q "https://sshx.io/" sshx_output.log; then
+            break
+          fi
+          echo "Tentativa $i/10 - Aguardando link..."
+          sleep 2
+        done
+        
+        # Extrai e exibe o link
+        SSHX_LINK=$(grep -o "https://sshx.io/[a-zA-Z0-9]*" sshx_output.log | head -1)
+        
+        if [ -n "$SSHX_LINK" ]; then
+          echo "✅ Terminal SSHX disponível!"
+          echo "🔗 Link: $SSHX_LINK"
+          echo "SSHX_LINK=$SSHX_LINK" >> $GITHUB_ENV
+          
+          # Cria um arquivo com o link para fácil acesso
+          echo "$SSHX_LINK" > sshx_link.txt
+          
+          # Exibe informações úteis
+          echo ""
+          echo "📌 INFORMAÇÕES DA SESSÃO:"
+          echo "- Link do terminal: $SSHX_LINK"
+          echo "- Duração máxima: ${{ github.event.inputs.session_duration || '30' }} minutos"
+          echo "- Sistema: Ubuntu Latest"
+          echo "- Usuário: runner"
+          echo ""
+          echo "💡 COMO USAR:"
+          echo "1. Clique no link acima ou copie e cole no navegador"
+          echo "2. Você terá acesso ao terminal do runner do GitHub Actions"
+          echo "3. Use comandos bash normalmente"
+          echo ""
+          echo "⚠️  AVISOS:"
+          echo "- Esta sessão expirará automaticamente"
+          echo "- Não execute comandos que possam danificar o ambiente"
+          echo "- Cuidado com informações sensíveis"
+        else
+          echo "❌ Não foi possível obter o link do SSHX"
+          echo "📋 Log completo:"
+          cat sshx_output.log
+          exit 1
+        fi
+        
+    - name: Keep session alive
+      run: |
+        echo "⏳ Mantendo sessão ativa por ${{ github.event.inputs.session_duration || '30' }} minutos..."
+        echo "🔗 Link do terminal: $SSHX_LINK"
+        
+        # Mantém o job ativo
+        DURATION_SECONDS=$((${{ github.event.inputs.session_duration || '30' }} * 60))
+        
+        for ((i=1; i<=DURATION_SECONDS; i+=30)); do
+          echo "⏱️  Sessão ativa há $(($i/60)) minuto(s) - Link: $SSHX_LINK"
+          sleep 30
+        done
+        
+        echo "⏰ Tempo limite atingido. Encerrando sessão..."
+        
+    - name: Upload session info
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sshx-session-info
+        path: |
+          sshx_link.txt
+          sshx_output.log
+        retention-days: 1
